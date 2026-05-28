@@ -1,5 +1,6 @@
 langchain==0.2.16
 langchain-community==0.2.16
+langchain-openai==0.1.23  # 新增标准OpenAI接口依赖
 pandas==2.2.2
 numpy==1.26.4
 akshare==1.18.63
