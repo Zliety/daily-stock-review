@@ -2,6 +2,6 @@ langchain==0.2.16
 langchain-community==0.2.16
 pandas==2.2.2
 numpy==1.26.4
-akshare==1.14.72
+akshare==1.18.63
 python-dotenv==1.0.1
 requests==2.32.3
