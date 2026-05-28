@@ -5,16 +5,17 @@ import numpy as np
 from langchain_openai import ChatOpenAI
 from datetime import datetime
 
-# -------------------------- 配置部分（无需修改，密钥从环境变量读取） --------------------------
+# -------------------------- 配置部分（修改为你自己的模型ID） --------------------------
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
 SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
-# 多模型自动切换（使用天翼云官方最新模型名称）
+# 多模型自动切换（使用你从控制台获取的模型ID）
 def get_llm():
+    # 替换为你在天翼云控制台获取的模型ID
     models = [
-        "deepseek-v3-flash",
-        "glm-5-flash",
-        "xingchen-3.5-flash"
+        "f23c54bf38b64ee194b28783d61be788",  # DeepSeek-V3-Flash
+        "5fea387da7f54ba38eab3d4a4fb4e9d8",  # GLM-5.1
+        "24625803b01f4f90b72abbe9d9cdf5cc"   # DeepSeek-V3.2（旗舰版）
     ]
     
     for model in models:
@@ -22,10 +23,10 @@ def get_llm():
             llm = ChatOpenAI(
                 model=model,
                 api_key=TIANYI_API_KEY,
-                base_url="https://wishub-x6.ctyun.cn/v1",  # ✅ 已更新为官方最新API地址
+                base_url="https://wishub-x6.ctyun.cn/v1",
                 temperature=0.1,
                 timeout=60,
-                max_retries=2  # 添加自动重试机制
+                max_retries=2
             )
             # 测试连接
             llm.invoke("测试")
@@ -35,7 +36,7 @@ def get_llm():
             print(f"❌ 模型 {model} 调用失败：{str(e)[:100]}...，切换下一个")
             continue
     
-    raise Exception("所有大模型均调用失败，请检查API Key和网络")
+    raise Exception("所有大模型均调用失败，请检查API Key和模型ID")
 
 llm = get_llm()
 
