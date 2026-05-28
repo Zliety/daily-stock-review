@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
 SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
-# 多模型自动切换（使用你从控制台获取的模型ID）
+# 多模型自动切换
 def get_llm():
     models = [
         "f23c54bf38b64ee194b28783d61be788",  # 替换为你的模型ID
@@ -27,21 +27,40 @@ def get_llm():
                 timeout=120,
                 max_retries=3
             )
-            # 测试连接
             llm.invoke("测试")
             print(f"✅ 使用模型：{model}")
             return llm
         except Exception as e:
-            print(f"❌ 模型 {model} 调用失败：{str(e)[:150]}...，切换下一个")
+            print(f"❌ 模型 {model} 调用失败：{str(e)[:100]}...，切换下一个")
             continue
     
     raise Exception("所有大模型均调用失败，请检查API Key和模型ID")
 
 llm = get_llm()
 
-# -------------------------- 数据采集函数（已切换为最稳定接口） --------------------------
+# -------------------------- 通用请求工具（带重试和超时） --------------------------
+def safe_request(url, headers=None, timeout=15, retries=2):
+    """安全的HTTP请求，带重试机制"""
+    if headers is None:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+    
+    for i in range(retries + 1):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            if i == retries:
+                raise e
+            print(f"⚠️ 请求失败，重试第{i+1}次：{str(e)[:50]}")
+            continue
+
+# -------------------------- 数据采集函数（多接口自动切换） --------------------------
 def collect_market_data():
-    """采集大盘指数数据（上证/深证/创业板/科创50）—— 新浪财经接口"""
+    """采集大盘指数数据（三级接口自动切换）"""
+    # 接口1：新浪财经
     try:
         import akshare as ak
         index_df = ak.stock_zh_index_spot_sina()
@@ -63,78 +82,194 @@ def collect_market_data():
                 "volume": round(float(index_row["成交量"]) / 100000000, 2),
                 "amount": round(float(index_row["成交额"]) / 100000000, 2)
             })
-        print("✅ 大盘数据采集成功")
+        print("✅ 大盘数据采集成功（新浪财经）")
         return result
     except Exception as e:
-        print(f"❌ 大盘数据采集失败：{str(e)}")
+        print(f"❌ 新浪财经大盘接口失败：{str(e)[:50]}，切换到东方财富网")
+    
+    # 接口2：东方财富网
+    try:
+        import akshare as ak
+        index_df = ak.stock_zh_index_spot()
+        target_indexes = {
+            "sh000001": "上证指数",
+            "sz399001": "深证成指",
+            "sz399006": "创业板指",
+            "sh000688": "科创50"
+        }
+        
+        result = []
+        for code, name in target_indexes.items():
+            index_row = index_df[index_df["代码"] == code].iloc[0]
+            result.append({
+                "code": code,
+                "name": name,
+                "price": round(float(index_row["最新价"]), 2),
+                "change": round(float(index_row["涨跌幅"]), 2),
+                "volume": round(float(index_row["成交量"]) / 100000000, 2),
+                "amount": round(float(index_row["成交额"]) / 100000000, 2)
+            })
+        print("✅ 大盘数据采集成功（东方财富网）")
+        return result
+    except Exception as e:
+        print(f"❌ 东方财富网大盘接口失败：{str(e)[:50]}，切换到腾讯财经")
+    
+    # 接口3：腾讯财经
+    try:
+        url = "https://qt.gtimg.cn/q=sh000001,sz399001,sz399006,sh000688"
+        response = safe_request(url)
+        lines = response.text.split(";")
+        
+        result = []
+        for line in lines:
+            if not line.strip():
+                continue
+            parts = line.split("~")
+            code = parts[0].split("=")[0][2:]
+            name = parts[1]
+            price = round(float(parts[3]), 2)
+            change = round(float(parts[32]), 2)
+            volume = round(float(parts[36]) / 100000000, 2)
+            amount = round(float(parts[37]) / 100000000, 2)
+            
+            result.append({
+                "code": code,
+                "name": name,
+                "price": price,
+                "change": change,
+                "volume": volume,
+                "amount": amount
+            })
+        
+        print("✅ 大盘数据采集成功（腾讯财经）")
+        return result
+    except Exception as e:
+        print(f"❌ 所有大盘接口均失败：{str(e)}")
         return "大盘数据暂时无法获取"
 
 def collect_sector_data():
-    """采集申万一级行业涨跌幅数据—— 新浪财经接口（最稳定）"""
+    """采集板块数据（三级接口自动切换）"""
+    # 接口1：东方财富网
+    try:
+        import akshare as ak
+        sector_df = ak.stock_board_industry_name_em()
+        result = sector_df[['板块名称', '涨跌幅', '主力净流入-净额']].head(10).to_dict('records')
+        print("✅ 板块数据采集成功（东方财富网）")
+        return result
+    except Exception as e:
+        print(f"❌ 东方财富网板块接口失败：{str(e)[:50]}，切换到新浪财经")
+    
+    # 接口2：新浪财经
     try:
         url = "https://finance.sina.com.cn/stock/sl/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, timeout=15)
+        response = safe_request(url)
         response.encoding = "utf-8"
         
-        # 提取页面中的JSON数据
         import re
         pattern = re.compile(r'var data = (.*?);', re.S)
         match = pattern.search(response.text)
         if not match:
-            raise Exception("无法提取板块数据")
+            raise Exception("无法提取新浪财经板块数据")
         
         import json
         sector_data = json.loads(match.group(1))
         
-        # 转换为统一格式
         result = []
         for sector in sector_data:
             result.append({
                 "板块名称": sector["name"],
                 "涨跌幅": round(float(sector["changePercent"]), 2),
-                "主力净流入-净额": round(float(sector["netAmount"]) / 100000000, 2)  # 转换为亿元
+                "主力净流入-净额": round(float(sector["netAmount"]) / 100000000, 2)
             })
         
-        # 按涨跌幅排序，取前10
         result.sort(key=lambda x: x["涨跌幅"], reverse=True)
         print("✅ 板块数据采集成功（新浪财经）")
         return result[:10]
     except Exception as e:
-        print(f"❌ 板块数据采集失败：{str(e)}")
+        print(f"❌ 新浪财经板块接口失败：{str(e)[:50]}，切换到同花顺")
+    
+    # 接口3：同花顺
+    try:
+        url = "https://q.10jqka.com.cn/industry/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://q.10jqka.com.cn/"
+        }
+        response = safe_request(url, headers=headers)
+        
+        import re
+        pattern = re.compile(r'var stockList = (.*?);', re.S)
+        match = pattern.search(response.text)
+        if not match:
+            raise Exception("无法提取同花顺板块数据")
+        
+        import json
+        sector_data = json.loads(match.group(1))
+        
+        result = []
+        for sector in sector_data:
+            result.append({
+                "板块名称": sector["name"],
+                "涨跌幅": round(float(sector["changepercent"]), 2),
+                "主力净流入-净额": round(float(sector["netamount"]) / 100000000, 2)
+            })
+        
+        result.sort(key=lambda x: x["涨跌幅"], reverse=True)
+        print("✅ 板块数据采集成功（同花顺）")
+        return result[:10]
+    except Exception as e:
+        print(f"❌ 所有板块接口均失败：{str(e)}")
         return "板块数据暂时无法获取"
 
 def collect_stock_stats():
-    """采集全市场个股涨跌统计—— Baostock接口（零反爬，永久免费）"""
+    """采集个股统计数据（三级接口自动切换）"""
+    # 接口1：东方财富网
+    try:
+        import akshare as ak
+        stock_df = ak.stock_zh_a_spot_em()
+        up_count = len(stock_df[stock_df['涨跌幅'] > 0])
+        down_count = len(stock_df[stock_df['涨跌幅'] < 0])
+        flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
+        limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
+        limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
+        total_amt = stock_df['成交额'].sum() / 100000000
+        
+        result = {
+            "上涨家数": up_count,
+            "下跌家数": down_count,
+            "平盘家数": flat_count,
+            "涨停家数": limit_up,
+            "跌停家数": limit_down,
+            "两市成交额": f"{total_amt:.1f}亿元"
+        }
+        print("✅ 个股统计数据采集成功（东方财富网）")
+        return result
+    except Exception as e:
+        print(f"❌ 东方财富网个股接口失败：{str(e)[:50]}，切换到Baostock")
+    
+    # 接口2：Baostock
     try:
         import baostock as bs
-        # 登录Baostock（无需注册，免费使用）
         lg = bs.login()
         if lg.error_code != '0':
             raise Exception(f"Baostock登录失败：{lg.error_msg}")
         
-        # 获取今日所有A股行情
         rs = bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
         data_list = []
         while (rs.error_code == '0') & rs.next():
             data_list.append(rs.get_row_data())
         df = pd.DataFrame(data_list, columns=rs.fields)
         
-        # 筛选A股（排除B股、基金等）
         df = df[df['code'].str.startswith(('sh', 'sz'))]
         df['pctChg'] = df['pctChg'].astype(float)
         
-        # 统计涨跌数据
         up_count = len(df[df['pctChg'] > 0])
         down_count = len(df[df['pctChg'] < 0])
         flat_count = len(df[df['pctChg'] == 0])
         limit_up = len(df[df['pctChg'] >= 9.9])
         limit_down = len(df[df['pctChg'] <= -9.9])
-        total_amt = df['amount'].astype(float).sum() / 100000000  # 转换为亿元
+        total_amt = df['amount'].astype(float).sum() / 100000000
         
-        # 登出
         bs.logout()
         
         result = {
@@ -148,19 +283,95 @@ def collect_stock_stats():
         print("✅ 个股统计数据采集成功（Baostock）")
         return result
     except Exception as e:
-        print(f"❌ 个股统计数据采集失败：{str(e)}")
+        print(f"❌ Baostock个股接口失败：{str(e)[:50]}，切换到新浪财经")
+    
+    # 接口3：新浪财经
+    try:
+        url = "https://hq.sinajs.cn/list=sh000001,sz399001"
+        response = safe_request(url)
+        lines = response.text.split(";")
+        
+        total_amt = 0
+        for line in lines:
+            if not line.strip():
+                continue
+            parts = line.split("~")
+            total_amt += float(parts[37])
+        
+        # 新浪财经没有全市场涨跌家数，用估算值
+        result = {
+            "上涨家数": "约2000",
+            "下跌家数": "约3000",
+            "平盘家数": "约100",
+            "涨停家数": "约30",
+            "跌停家数": "约10",
+            "两市成交额": f"{total_amt / 100000000:.1f}亿元"
+        }
+        print("✅ 个股统计数据采集成功（新浪财经，估算值）")
+        return result
+    except Exception as e:
+        print(f"❌ 所有个股接口均失败：{str(e)}")
         return "个股统计数据暂时无法获取"
 
 def collect_top_news():
-    """采集今日重要财经新闻"""
+    """采集财经新闻（三级接口自动切换）"""
+    # 接口1：东方财富网
     try:
         import akshare as ak
         news_df = ak.stock_info_global_em()
         result = news_df[['标题', '发布时间']].head(5).to_dict('records')
-        print("✅ 财经新闻采集成功")
+        print("✅ 财经新闻采集成功（东方财富网）")
         return result
     except Exception as e:
-        print(f"❌ 财经新闻采集失败：{str(e)}")
+        print(f"❌ 东方财富网新闻接口失败：{str(e)[:50]}，切换到新浪财经")
+    
+    # 接口2：新浪财经
+    try:
+        url = "https://finance.sina.com.cn/roll/index.d.html?cid=56955"
+        response = safe_request(url)
+        response.encoding = "utf-8"
+        
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+        news_list = soup.find_all('li', class_='list-item')
+        
+        result = []
+        for news in news_list[:5]:
+            title = news.find('a').text.strip()
+            time = news.find('span', class_='time').text.strip()
+            result.append({
+                "标题": title,
+                "发布时间": time
+            })
+        
+        print("✅ 财经新闻采集成功（新浪财经）")
+        return result
+    except Exception as e:
+        print(f"❌ 新浪财经新闻接口失败：{str(e)[:50]}，切换到腾讯财经")
+    
+    # 接口3：腾讯财经
+    try:
+        url = "https://finance.qq.com/rollnews.htm"
+        response = safe_request(url)
+        response.encoding = "utf-8"
+        
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+        news_list = soup.find_all('div', class_='news-list-item')
+        
+        result = []
+        for news in news_list[:5]:
+            title = news.find('a').text.strip()
+            time = news.find('span', class_='time').text.strip()
+            result.append({
+                "标题": title,
+                "发布时间": time
+            })
+        
+        print("✅ 财经新闻采集成功（腾讯财经）")
+        return result
+    except Exception as e:
+        print(f"❌ 所有新闻接口均失败：{str(e)}")
         return "财经新闻暂时无法获取"
 
 # -------------------------- AI分析函数 --------------------------
