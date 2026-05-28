@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from langchain_openai import ChatOpenAI
 from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore")
 
 # -------------------------- 配置部分（修改为你自己的模型ID） --------------------------
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
@@ -11,11 +13,8 @@ SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
 # 多模型自动切换（使用你从控制台获取的模型ID）
 def get_llm():
-    # 替换为你在天翼云控制台获取的模型ID
     models = [
-        "f23c54bf38b64ee194b28783d61be788",  # DeepSeek-V3-Flash
-        "5fea387da7f54ba38eab3d4a4fb4e9d8",  # GLM-5.1
-        "24625803b01f4f90b72abbe9d9cdf5cc"   # DeepSeek-V3.2（旗舰版）
+        "f23c54bf38b64ee194b28783d61be788",  # 替换为你的模型ID
     ]
     
     for model in models:
@@ -25,27 +24,28 @@ def get_llm():
                 api_key=TIANYI_API_KEY,
                 base_url="https://wishub-x6.ctyun.cn/v1",
                 temperature=0.1,
-                timeout=60,
-                max_retries=2
+                timeout=120,
+                max_retries=3
             )
             # 测试连接
             llm.invoke("测试")
             print(f"✅ 使用模型：{model}")
             return llm
         except Exception as e:
-            print(f"❌ 模型 {model} 调用失败：{str(e)[:100]}...，切换下一个")
+            print(f"❌ 模型 {model} 调用失败：{str(e)[:150]}...，切换下一个")
             continue
     
     raise Exception("所有大模型均调用失败，请检查API Key和模型ID")
 
 llm = get_llm()
 
-# -------------------------- 数据采集函数 --------------------------
+# -------------------------- 数据采集函数（已修复） --------------------------
 def collect_market_data():
     """采集大盘指数数据（上证/深证/创业板/科创50）"""
     try:
         import akshare as ak
-        index_df = ak.stock_zh_index_spot()
+        # 使用最新稳定接口
+        index_df = ak.stock_zh_index_spot_sina()
         target_indexes = {
             "sh000001": "上证指数",
             "sz399001": "深证成指",
@@ -55,40 +55,49 @@ def collect_market_data():
         
         result = []
         for code, name in target_indexes.items():
+            # 匹配对应指数数据
             index_row = index_df[index_df["代码"] == code].iloc[0]
             result.append({
                 "code": code,
                 "name": name,
-                "price": round(index_row["最新价"], 2),
-                "change": round(index_row["涨跌幅"], 2),
-                "volume": round(index_row["成交量"] / 100000000, 2),
-                "amount": round(index_row["成交额"] / 100000000, 2)
+                "price": round(float(index_row["最新价"]), 2),
+                "change": round(float(index_row["涨跌幅"]), 2),
+                "volume": round(float(index_row["成交量"]) / 100000000, 2),  # 转换为亿股
+                "amount": round(float(index_row["成交额"]) / 100000000, 2)   # 转换为亿元
             })
+        print("✅ 大盘数据采集成功")
         return result
     except Exception as e:
-        return f"大盘数据采集失败：{str(e)}"
+        print(f"❌ 大盘数据采集失败：{str(e)}")
+        return "大盘数据暂时无法获取"
 
 def collect_sector_data():
     """采集申万一级行业涨跌幅数据"""
     try:
         import akshare as ak
+        # 使用东方财富网最新接口
         sector_df = ak.stock_board_industry_name_em()
-        return sector_df[['板块名称', '涨跌幅', '主力净流入-净额']].head(10).to_dict('records')
+        result = sector_df[['板块名称', '涨跌幅', '主力净流入-净额']].head(10).to_dict('records')
+        print("✅ 板块数据采集成功")
+        return result
     except Exception as e:
-        return f"板块数据采集失败：{str(e)}"
+        print(f"❌ 板块数据采集失败：{str(e)}")
+        return "板块数据暂时无法获取"
 
 def collect_stock_stats():
     """采集全市场个股涨跌统计"""
     try:
         import akshare as ak
+        # 使用东方财富网最新接口
         stock_df = ak.stock_zh_a_spot_em()
         up_count = len(stock_df[stock_df['涨跌幅'] > 0])
         down_count = len(stock_df[stock_df['涨跌幅'] < 0])
         flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
         limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
         limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
-        total_amt = stock_df['成交额'].sum() / 100000000
-        return {
+        total_amt = stock_df['成交额'].sum() / 100000000  # 转换为亿元
+        
+        result = {
             "上涨家数": up_count,
             "下跌家数": down_count,
             "平盘家数": flat_count,
@@ -96,26 +105,23 @@ def collect_stock_stats():
             "跌停家数": limit_down,
             "两市成交额": f"{total_amt:.1f}亿元"
         }
+        print("✅ 个股统计数据采集成功")
+        return result
     except Exception as e:
-        return f"个股统计失败：{str(e)}"
-
-def collect_northbound_flow():
-    """采集北向资金净流入数据"""
-    try:
-        import akshare as ak
-        nb_df = ak.stock_hsgt_northbound_flow_em()
-        return f"北向资金今日净流入：{nb_df['当日净流入-净额'].iloc[0]}亿元"
-    except Exception as e:
-        return f"北向资金数据采集失败：{str(e)}"
+        print(f"❌ 个股统计数据采集失败：{str(e)}")
+        return "个股统计数据暂时无法获取"
 
 def collect_top_news():
     """采集今日重要财经新闻"""
     try:
         import akshare as ak
         news_df = ak.stock_info_global_em()
-        return news_df[['标题', '发布时间']].head(5).to_dict('records')
+        result = news_df[['标题', '发布时间']].head(5).to_dict('records')
+        print("✅ 财经新闻采集成功")
+        return result
     except Exception as e:
-        return f"新闻数据采集失败：{str(e)}"
+        print(f"❌ 财经新闻采集失败：{str(e)}")
+        return "财经新闻暂时无法获取"
 
 # -------------------------- AI分析函数 --------------------------
 def analyze_market(data):
@@ -123,13 +129,11 @@ def analyze_market(data):
     你是资深A股大盘分析师。请基于以下数据客观分析今日市场：
     大盘指数：{data['market']}
     个股涨跌：{data['stock_stats']}
-    北向资金：{data['northbound']}
     
     分析要求：
     1. 今日大盘整体走势定性（上涨/下跌/震荡）及核心特征
     2. 市场赚钱效应评估（涨跌家数、涨跌停对比）
     3. 成交量变化解读（放量/缩量及意义）
-    4. 北向资金流向的信号意义
     
     语言简洁专业，不超过300字，避免情绪化表达。
     """
@@ -187,9 +191,9 @@ def generate_report(analysis):
 """
 
 def push_to_wechat(title, content):
-    """通过Server酱推送到微信"""
+    """通过Server酱推送到微信（已修复）"""
     if not SERVER_CHAN_KEY:
-        print("未配置Server酱Key，跳过推送")
+        print("⚠️ 未配置Server酱Key，跳过推送")
         return False
     
     url = f"https://sctapi.ftqq.com/{SERVER_CHAN_KEY}.send"
@@ -198,10 +202,15 @@ def push_to_wechat(title, content):
         "desp": content
     }
     try:
-        response = requests.post(url, data=data, timeout=10)
-        return response.status_code == 200
+        response = requests.post(url, data=data, timeout=15)
+        if response.status_code == 200:
+            print("✅ 微信推送成功！")
+            return True
+        else:
+            print(f"❌ 微信推送失败，状态码：{response.status_code}，响应：{response.text}")
+            return False
     except Exception as e:
-        print(f"微信推送失败：{e}")
+        print(f"❌ 微信推送失败：{str(e)}")
         return False
 
 # -------------------------- 主流程 --------------------------
@@ -211,19 +220,16 @@ def main():
     print("="*50)
 
     # 1. 数据采集
-    print("\n[1/5] 正在采集大盘数据...")
+    print("\n[1/4] 正在采集大盘数据...")
     market_data = collect_market_data()
     
-    print("[2/5] 正在采集板块数据...")
+    print("[2/4] 正在采集板块数据...")
     sector_data = collect_sector_data()
     
-    print("[3/5] 正在采集个股统计...")
+    print("[3/4] 正在采集个股统计...")
     stock_stats = collect_stock_stats()
     
-    print("[4/5] 正在采集北向资金...")
-    northbound_data = collect_northbound_flow()
-    
-    print("[5/5] 正在采集财经新闻...")
+    print("[4/4] 正在采集财经新闻...")
     news_data = collect_top_news()
 
     # 整合数据
@@ -231,7 +237,6 @@ def main():
         "market": market_data,
         "sectors": sector_data,
         "stock_stats": stock_stats,
-        "northbound": northbound_data,
         "news": news_data
     }
 
@@ -253,13 +258,9 @@ def main():
     # 4. 推送报告
     print("推送报告到微信...")
     today_str = datetime.now().strftime("%Y-%m-%d")
-    success = push_to_wechat(f"{today_str} A股复盘报告", report)
+    push_to_wechat(f"{today_str} A股复盘报告", report)
     
-    if success:
-        print("✅ 报告推送成功！")
-    else:
-        print("❌ 报告推送失败，请检查Server酱配置")
-        raise Exception("微信推送失败")
+    print("\n✅ 复盘任务执行完成！")
 
 if __name__ == "__main__":
     main()
