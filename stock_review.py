@@ -2,44 +2,49 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from langchain_openai import ChatOpenAI  # 改用标准OpenAI接口
+from langchain_openai import ChatOpenAI
 from datetime import datetime
 
 # -------------------------- 配置部分（无需修改，密钥从环境变量读取） --------------------------
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
 SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
-# 多模型自动切换（星辰→GLM5→DeepSeek）
+# 多模型自动切换（使用天翼云官方最新模型名称）
 def get_llm():
-    models = ["xingchen-3.5-flash", "glm-5-flash", "deepseek-v3-flash"]
+    models = [
+        "deepseek-v3-flash",
+        "glm-5-flash",
+        "xingchen-3.5-flash"
+    ]
+    
     for model in models:
         try:
             llm = ChatOpenAI(
                 model=model,
                 api_key=TIANYI_API_KEY,
-                base_url="https://ai.ctyun.cn/v1",  # 天翼云息壤Token官方接口地址
+                base_url="https://wishub-x6.ctyun.cn/v1",  # ✅ 已更新为官方最新API地址
                 temperature=0.1,
-                timeout=60
+                timeout=60,
+                max_retries=2  # 添加自动重试机制
             )
             # 测试连接
             llm.invoke("测试")
-            print(f"使用模型：{model}")
+            print(f"✅ 使用模型：{model}")
             return llm
         except Exception as e:
-            print(f"模型 {model} 调用失败：{e}，切换下一个")
+            print(f"❌ 模型 {model} 调用失败：{str(e)[:100]}...，切换下一个")
             continue
+    
     raise Exception("所有大模型均调用失败，请检查API Key和网络")
 
 llm = get_llm()
 
 # -------------------------- 数据采集函数 --------------------------
 def collect_market_data():
-    """采集大盘指数数据（上证/深证/创业板/科创50）—— 已改用akshare，兼容Python 3.11"""
+    """采集大盘指数数据（上证/深证/创业板/科创50）"""
     try:
         import akshare as ak
-        # 获取A股所有指数实时行情
         index_df = ak.stock_zh_index_spot()
-        # 筛选目标指数（代码带交易所前缀，与akshare返回格式一致）
         target_indexes = {
             "sh000001": "上证指数",
             "sz399001": "深证成指",
@@ -49,15 +54,14 @@ def collect_market_data():
         
         result = []
         for code, name in target_indexes.items():
-            # 匹配对应指数数据
             index_row = index_df[index_df["代码"] == code].iloc[0]
             result.append({
                 "code": code,
                 "name": name,
                 "price": round(index_row["最新价"], 2),
                 "change": round(index_row["涨跌幅"], 2),
-                "volume": round(index_row["成交量"] / 100000000, 2),  # 转换为亿股
-                "amount": round(index_row["成交额"] / 100000000, 2)   # 转换为亿元
+                "volume": round(index_row["成交量"] / 100000000, 2),
+                "amount": round(index_row["成交额"] / 100000000, 2)
             })
         return result
     except Exception as e:
@@ -82,7 +86,7 @@ def collect_stock_stats():
         flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
         limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
         limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
-        total_amt = stock_df['成交额'].sum() / 100000000  # 转换为亿元
+        total_amt = stock_df['成交额'].sum() / 100000000
         return {
             "上涨家数": up_count,
             "下跌家数": down_count,
