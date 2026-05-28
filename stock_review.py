@@ -33,12 +33,32 @@ llm = get_llm()
 
 # -------------------------- 数据采集函数 --------------------------
 def collect_market_data():
-    """采集大盘指数数据（上证/深证/创业板/科创50）"""
+    """采集大盘指数数据（上证/深证/创业板/科创50）—— 已改用akshare，兼容Python 3.11"""
     try:
-        from mootdx.quotes import Quotes
-        client = Quotes.factory(market='std')
-        indexes = client.quotes(symbol=['000001', '399001', '399006', '000688'])
-        return indexes[['code', 'name', 'price', 'change', 'volume', 'amount']].to_dict('records')
+        import akshare as ak
+        # 获取A股所有指数实时行情
+        index_df = ak.stock_zh_index_spot()
+        # 筛选目标指数（代码带交易所前缀，与akshare返回格式一致）
+        target_indexes = {
+            "sh000001": "上证指数",
+            "sz399001": "深证成指",
+            "sz399006": "创业板指",
+            "sh000688": "科创50"
+        }
+        
+        result = []
+        for code, name in target_indexes.items():
+            # 匹配对应指数数据
+            index_row = index_df[index_df["代码"] == code].iloc[0]
+            result.append({
+                "code": code,
+                "name": name,
+                "price": round(index_row["最新价"], 2),
+                "change": round(index_row["涨跌幅"], 2),
+                "volume": round(index_row["成交量"] / 100000000, 2),  # 转换为亿股
+                "amount": round(index_row["成交额"] / 100000000, 2)   # 转换为亿元
+            })
+        return result
     except Exception as e:
         return f"大盘数据采集失败：{str(e)}"
 
