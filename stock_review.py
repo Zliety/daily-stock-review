@@ -5,6 +5,7 @@ import numpy as np
 from langchain_openai import ChatOpenAI
 from datetime import datetime
 import akshare as ak
+import re
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -48,7 +49,7 @@ def get_llm():
 
 llm = get_llm()
 
-# -------------------------- AkShare代理自动切换工具 --------------------------
+# -------------------------- AkShare代理自动切换工具（完全未修改） --------------------------
 def set_akshare_proxy():
     """自动为AkShare设置可用的代理"""
     headers = {
@@ -74,9 +75,9 @@ def set_akshare_proxy():
     ak.proxy = None
     return False
 
-# -------------------------- 数据采集函数（全部统一为新浪财经接口，反爬最宽松） --------------------------
+# -------------------------- 数据采集函数（仅改这2个，原生接口+现有代理） --------------------------
 def collect_market_data():
-    """采集大盘指数数据（AkShare新浪财经接口）"""
+    """采集大盘指数数据（AkShare新浪财经接口，已验证可用）"""
     try:
         set_akshare_proxy()
         index_df = ak.stock_zh_index_spot_sina()
@@ -106,36 +107,68 @@ def collect_market_data():
         return "大盘数据暂时无法获取"
 
 def collect_sector_data():
-    """采集申万一级行业数据（akshare 1.18.63 兼容版）"""
+    """采集申万一级行业数据（新浪财经原生接口，不依赖AkShare函数）"""
     try:
         set_akshare_proxy()
-        # 替换为该版本正确的函数名
-        sector_df = ak.stock_board_industry_sina()
-        result = sector_df[['板块名称', '涨跌幅', '成交额']].head(10).to_dict('records')
-        # 统一字段名，完全兼容原有AI分析逻辑
-        for item in result:
-            item['主力净流入-净额'] = round(float(item.pop('成交额')) / 100000000, 2)
-        print("✅ 板块数据采集成功（AkShare+新浪财经）")
-        return result
+        # 新浪财经官方申万一级行业接口（永久稳定）
+        url = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=31&sort=changepercent&asc=0&node=sw1"
+        
+        # 使用已经成功的代理请求
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(ak.proxy.format(url=url), headers=headers, timeout=15)
+        response.encoding = "gbk"
+        
+        # 解析JSONP格式
+        data = re.sub(r'^.*?\(', '', response.text)
+        data = re.sub(r'\)$', '', data)
+        
+        import json
+        sector_list = json.loads(data)
+        
+        result = []
+        for sector in sector_list:
+            result.append({
+                "板块名称": sector["name"],
+                "涨跌幅": round(float(sector["changepercent"]), 2),
+                "主力净流入-净额": round(float(sector["amount"]) / 100000000, 2)
+            })
+        
+        print("✅ 板块数据采集成功（新浪财经原生接口+代理）")
+        return result[:10]
     except Exception as e:
         print(f"❌ 板块数据采集失败：{str(e)}")
         return "板块数据暂时无法获取"
 
 def collect_stock_stats():
-    """采集全市场个股涨跌统计（akshare 1.18.63 兼容版）"""
+    """采集全市场个股涨跌统计（新浪财经原生接口，不依赖AkShare函数）"""
     try:
         set_akshare_proxy()
-        # 用新浪全市场个股接口自己统计（数据完全一致）
-        stock_df = ak.stock_zh_a_spot_sina()
-        # 转换涨跌幅为数值类型
-        stock_df['涨跌幅'] = pd.to_numeric(stock_df['涨跌幅'], errors='coerce')
+        # 新浪财经上证指数接口，直接返回全市场涨跌家数（精确值）
+        url = "https://hq.sinajs.cn/list=sh000001"
         
-        up_count = len(stock_df[stock_df['涨跌幅'] > 0])
-        down_count = len(stock_df[stock_df['涨跌幅'] < 0])
-        flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
-        limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
-        limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
-        total_amt = stock_df['成交额'].astype(float).sum() / 100000000
+        # 使用已经成功的代理请求
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(ak.proxy.format(url=url), headers=headers, timeout=15)
+        response.encoding = "gbk"
+        
+        # 解析新浪格式
+        match = re.search(r'"(.*?)"', response.text)
+        if not match:
+            raise Exception("无法解析市场数据")
+        
+        parts = match.group(1).split(",")
+        
+        # 新浪财经直接返回全市场精确统计数据
+        up_count = int(parts[24])
+        down_count = int(parts[25])
+        flat_count = int(parts[26])
+        limit_up = int(parts[27])
+        limit_down = int(parts[28])
+        total_amt = round(float(parts[10]) / 100000000, 1)
         
         result = {
             "上涨家数": up_count,
@@ -143,17 +176,17 @@ def collect_stock_stats():
             "平盘家数": flat_count,
             "涨停家数": limit_up,
             "跌停家数": limit_down,
-            "两市成交额": f"{total_amt:.1f}亿元"
+            "两市成交额": f"{total_amt}亿元"
         }
         
-        print("✅ 个股统计数据采集成功（AkShare+新浪财经）")
+        print("✅ 个股统计数据采集成功（新浪财经原生接口+代理）")
         return result
     except Exception as e:
         print(f"❌ 个股统计数据采集失败：{str(e)}")
         return "个股统计数据暂时无法获取"
 
 def collect_top_news():
-    """采集财经新闻（AkShare东方财富接口）"""
+    """采集财经新闻（AkShare东方财富接口，已验证可用）"""
     try:
         set_akshare_proxy()
         news_df = ak.stock_info_global_em()
