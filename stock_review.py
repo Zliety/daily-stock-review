@@ -39,12 +39,11 @@ def get_llm():
 
 llm = get_llm()
 
-# -------------------------- 数据采集函数（已修复） --------------------------
+# -------------------------- 数据采集函数（已切换为最稳定接口） --------------------------
 def collect_market_data():
-    """采集大盘指数数据（上证/深证/创业板/科创50）"""
+    """采集大盘指数数据（上证/深证/创业板/科创50）—— 新浪财经接口"""
     try:
         import akshare as ak
-        # 使用最新稳定接口
         index_df = ak.stock_zh_index_spot_sina()
         target_indexes = {
             "sh000001": "上证指数",
@@ -55,15 +54,14 @@ def collect_market_data():
         
         result = []
         for code, name in target_indexes.items():
-            # 匹配对应指数数据
             index_row = index_df[index_df["代码"] == code].iloc[0]
             result.append({
                 "code": code,
                 "name": name,
                 "price": round(float(index_row["最新价"]), 2),
                 "change": round(float(index_row["涨跌幅"]), 2),
-                "volume": round(float(index_row["成交量"]) / 100000000, 2),  # 转换为亿股
-                "amount": round(float(index_row["成交额"]) / 100000000, 2)   # 转换为亿元
+                "volume": round(float(index_row["成交量"]) / 100000000, 2),
+                "amount": round(float(index_row["成交额"]) / 100000000, 2)
             })
         print("✅ 大盘数据采集成功")
         return result
@@ -72,30 +70,72 @@ def collect_market_data():
         return "大盘数据暂时无法获取"
 
 def collect_sector_data():
-    """采集申万一级行业涨跌幅数据"""
+    """采集申万一级行业涨跌幅数据—— 新浪财经接口（最稳定）"""
     try:
-        import akshare as ak
-        # 使用东方财富网最新接口
-        sector_df = ak.stock_board_industry_name_em()
-        result = sector_df[['板块名称', '涨跌幅', '主力净流入-净额']].head(10).to_dict('records')
-        print("✅ 板块数据采集成功")
-        return result
+        url = "https://finance.sina.com.cn/stock/sl/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        response.encoding = "utf-8"
+        
+        # 提取页面中的JSON数据
+        import re
+        pattern = re.compile(r'var data = (.*?);', re.S)
+        match = pattern.search(response.text)
+        if not match:
+            raise Exception("无法提取板块数据")
+        
+        import json
+        sector_data = json.loads(match.group(1))
+        
+        # 转换为统一格式
+        result = []
+        for sector in sector_data:
+            result.append({
+                "板块名称": sector["name"],
+                "涨跌幅": round(float(sector["changePercent"]), 2),
+                "主力净流入-净额": round(float(sector["netAmount"]) / 100000000, 2)  # 转换为亿元
+            })
+        
+        # 按涨跌幅排序，取前10
+        result.sort(key=lambda x: x["涨跌幅"], reverse=True)
+        print("✅ 板块数据采集成功（新浪财经）")
+        return result[:10]
     except Exception as e:
         print(f"❌ 板块数据采集失败：{str(e)}")
         return "板块数据暂时无法获取"
 
 def collect_stock_stats():
-    """采集全市场个股涨跌统计"""
+    """采集全市场个股涨跌统计—— Baostock接口（零反爬，永久免费）"""
     try:
-        import akshare as ak
-        # 使用东方财富网最新接口
-        stock_df = ak.stock_zh_a_spot_em()
-        up_count = len(stock_df[stock_df['涨跌幅'] > 0])
-        down_count = len(stock_df[stock_df['涨跌幅'] < 0])
-        flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
-        limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
-        limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
-        total_amt = stock_df['成交额'].sum() / 100000000  # 转换为亿元
+        import baostock as bs
+        # 登录Baostock（无需注册，免费使用）
+        lg = bs.login()
+        if lg.error_code != '0':
+            raise Exception(f"Baostock登录失败：{lg.error_msg}")
+        
+        # 获取今日所有A股行情
+        rs = bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        df = pd.DataFrame(data_list, columns=rs.fields)
+        
+        # 筛选A股（排除B股、基金等）
+        df = df[df['code'].str.startswith(('sh', 'sz'))]
+        df['pctChg'] = df['pctChg'].astype(float)
+        
+        # 统计涨跌数据
+        up_count = len(df[df['pctChg'] > 0])
+        down_count = len(df[df['pctChg'] < 0])
+        flat_count = len(df[df['pctChg'] == 0])
+        limit_up = len(df[df['pctChg'] >= 9.9])
+        limit_down = len(df[df['pctChg'] <= -9.9])
+        total_amt = df['amount'].astype(float).sum() / 100000000  # 转换为亿元
+        
+        # 登出
+        bs.logout()
         
         result = {
             "上涨家数": up_count,
@@ -105,7 +145,7 @@ def collect_stock_stats():
             "跌停家数": limit_down,
             "两市成交额": f"{total_amt:.1f}亿元"
         }
-        print("✅ 个股统计数据采集成功")
+        print("✅ 个股统计数据采集成功（Baostock）")
         return result
     except Exception as e:
         print(f"❌ 个股统计数据采集失败：{str(e)}")
@@ -191,7 +231,7 @@ def generate_report(analysis):
 """
 
 def push_to_wechat(title, content):
-    """通过Server酱推送到微信（已修复）"""
+    """通过Server酱推送到微信"""
     if not SERVER_CHAN_KEY:
         print("⚠️ 未配置Server酱Key，跳过推送")
         return False
@@ -207,7 +247,7 @@ def push_to_wechat(title, content):
             print("✅ 微信推送成功！")
             return True
         else:
-            print(f"❌ 微信推送失败，状态码：{response.status_code}，响应：{response.text}")
+            print(f"❌ 微信推送失败，状态码：{response.status_code}")
             return False
     except Exception as e:
         print(f"❌ 微信推送失败：{str(e)}")
