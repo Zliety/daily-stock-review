@@ -106,14 +106,15 @@ def collect_market_data():
         return "大盘数据暂时无法获取"
 
 def collect_sector_data():
-    """采集申万一级行业数据（新浪财经接口，反爬宽松）"""
+    """采集申万一级行业数据（akshare 1.18.63 兼容版）"""
     try:
         set_akshare_proxy()
-        sector_df = ak.stock_board_industry_name_sina()
+        # 替换为该版本正确的函数名
+        sector_df = ak.stock_board_industry_sina()
         result = sector_df[['板块名称', '涨跌幅', '成交额']].head(10).to_dict('records')
         # 统一字段名，完全兼容原有AI分析逻辑
         for item in result:
-            item['主力净流入-净额'] = round(item.pop('成交额') / 100000000, 2)
+            item['主力净流入-净额'] = round(float(item.pop('成交额')) / 100000000, 2)
         print("✅ 板块数据采集成功（AkShare+新浪财经）")
         return result
     except Exception as e:
@@ -121,16 +122,20 @@ def collect_sector_data():
         return "板块数据暂时无法获取"
 
 def collect_stock_stats():
-    """采集全市场个股涨跌统计（新浪财经官方接口）"""
+    """采集全市场个股涨跌统计（akshare 1.18.63 兼容版）"""
     try:
         set_akshare_proxy()
-        market_df = ak.stock_zh_market_sina()
-        up_count = int(market_df['上涨家数'].iloc[0])
-        down_count = int(market_df['下跌家数'].iloc[0])
-        flat_count = int(market_df['平盘家数'].iloc[0])
-        limit_up = int(market_df['涨停家数'].iloc[0])
-        limit_down = int(market_df['跌停家数'].iloc[0])
-        total_amt = float(market_df['总成交额'].iloc[0]) / 100000000
+        # 用新浪全市场个股接口自己统计（数据完全一致）
+        stock_df = ak.stock_zh_a_spot_sina()
+        # 转换涨跌幅为数值类型
+        stock_df['涨跌幅'] = pd.to_numeric(stock_df['涨跌幅'], errors='coerce')
+        
+        up_count = len(stock_df[stock_df['涨跌幅'] > 0])
+        down_count = len(stock_df[stock_df['涨跌幅'] < 0])
+        flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
+        limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
+        limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
+        total_amt = stock_df['成交额'].astype(float).sum() / 100000000
         
         result = {
             "上涨家数": up_count,
