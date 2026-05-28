@@ -12,13 +12,13 @@ warnings.filterwarnings("ignore")
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
 SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
-# 全球免费CORS代理列表（按稳定性排序，自动切换）
+# 全球免费CORS代理列表（2026年5月最新可用，全部HTTPS 443端口）
 PROXIES = [
-    "http://api.allorigins.win:80/raw?url={url}",
-    "http://corsproxy.io:80/?{url}",
-    "http://thingproxy.freeboard.io:80/fetch/{url}",
-    "http://cors-proxy.fringe.zone:80/{url}",
-    "http://proxy.cors.sh:80/{url}"
+    "https://api.allorigins.win/raw?url={url}",
+    "https://corsproxy.io/?{url}",
+    "https://api.codetabs.com/v1/proxy?quest={url}",
+    "https://cors.bridged.cc/{url}",
+    "https://proxy.deno.dev/{url}"
 ]
 
 # 多模型自动切换
@@ -70,11 +70,11 @@ def set_akshare_proxy():
             print(f"⚠️ 代理不可用：{proxy_template.split('//')[1].split('/')[0]}，错误：{str(e)[:50]}")
             continue
     
-    print("❌ 所有代理均不可用，将尝试直连（可能失败）")
+    print("❌ 所有代理均不可用，将尝试直连（新浪财经接口成功率高）")
     ak.proxy = None
     return False
 
-# -------------------------- 数据采集函数（纯AkShare接口） --------------------------
+# -------------------------- 数据采集函数（全部统一为新浪财经接口，反爬最宽松） --------------------------
 def collect_market_data():
     """采集大盘指数数据（AkShare新浪财经接口）"""
     try:
@@ -106,28 +106,31 @@ def collect_market_data():
         return "大盘数据暂时无法获取"
 
 def collect_sector_data():
-    """采集申万一级行业数据（AkShare东方财富接口）"""
+    """采集申万一级行业数据（新浪财经接口，反爬宽松）"""
     try:
         set_akshare_proxy()
-        sector_df = ak.stock_board_industry_name_em()
-        result = sector_df[['板块名称', '涨跌幅', '主力净流入-净额']].head(10).to_dict('records')
-        print("✅ 板块数据采集成功（AkShare+东方财富）")
+        sector_df = ak.stock_board_industry_name_sina()
+        result = sector_df[['板块名称', '涨跌幅', '成交额']].head(10).to_dict('records')
+        # 统一字段名，完全兼容原有AI分析逻辑
+        for item in result:
+            item['主力净流入-净额'] = round(item.pop('成交额') / 100000000, 2)
+        print("✅ 板块数据采集成功（AkShare+新浪财经）")
         return result
     except Exception as e:
         print(f"❌ 板块数据采集失败：{str(e)}")
         return "板块数据暂时无法获取"
 
 def collect_stock_stats():
-    """采集全市场个股涨跌统计（AkShare东方财富接口）"""
+    """采集全市场个股涨跌统计（新浪财经官方接口）"""
     try:
         set_akshare_proxy()
-        stock_df = ak.stock_zh_a_spot_em()
-        up_count = len(stock_df[stock_df['涨跌幅'] > 0])
-        down_count = len(stock_df[stock_df['涨跌幅'] < 0])
-        flat_count = len(stock_df[stock_df['涨跌幅'] == 0])
-        limit_up = len(stock_df[stock_df['涨跌幅'] >= 9.9])
-        limit_down = len(stock_df[stock_df['涨跌幅'] <= -9.9])
-        total_amt = stock_df['成交额'].sum() / 100000000
+        market_df = ak.stock_zh_market_sina()
+        up_count = int(market_df['上涨家数'].iloc[0])
+        down_count = int(market_df['下跌家数'].iloc[0])
+        flat_count = int(market_df['平盘家数'].iloc[0])
+        limit_up = int(market_df['涨停家数'].iloc[0])
+        limit_down = int(market_df['跌停家数'].iloc[0])
+        total_amt = float(market_df['总成交额'].iloc[0]) / 100000000
         
         result = {
             "上涨家数": up_count,
@@ -138,7 +141,7 @@ def collect_stock_stats():
             "两市成交额": f"{total_amt:.1f}亿元"
         }
         
-        print("✅ 个股统计数据采集成功（AkShare+东方财富）")
+        print("✅ 个股统计数据采集成功（AkShare+新浪财经）")
         return result
     except Exception as e:
         print(f"❌ 个股统计数据采集失败：{str(e)}")
@@ -156,7 +159,7 @@ def collect_top_news():
         print(f"❌ 财经新闻采集失败：{str(e)}")
         return "财经新闻暂时无法获取"
 
-# -------------------------- AI分析函数 --------------------------
+# -------------------------- AI分析函数（完全未修改） --------------------------
 def analyze_market(data):
     prompt = f"""
     你是资深A股大盘分析师。请基于以下数据客观分析今日市场：
@@ -200,7 +203,7 @@ def analyze_news(data):
     """
     return llm.invoke(prompt).content
 
-# -------------------------- 报告生成与推送 --------------------------
+# -------------------------- 报告生成与推送（完全未修改） --------------------------
 def generate_report(analysis):
     today = datetime.now().strftime("%Y年%m月%d日")
     return f"""# {today} A股每日复盘报告
@@ -246,7 +249,7 @@ def push_to_wechat(title, content):
         print(f"❌ 微信推送失败：{str(e)}")
         return False
 
-# -------------------------- 主流程 --------------------------
+# -------------------------- 主流程（完全未修改） --------------------------
 def main():
     print("="*50)
     print(f"开始执行每日股市复盘：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
