@@ -2,7 +2,7 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from langchain_community.chat_models import ChatTianyi
+from langchain_openai import ChatOpenAI  # 改用标准OpenAI接口
 from datetime import datetime
 
 # -------------------------- 配置部分（无需修改，密钥从环境变量读取） --------------------------
@@ -14,9 +14,10 @@ def get_llm():
     models = ["xingchen-3.5-flash", "glm-5-flash", "deepseek-v3-flash"]
     for model in models:
         try:
-            llm = ChatTianyi(
+            llm = ChatOpenAI(
                 model=model,
                 api_key=TIANYI_API_KEY,
+                base_url="https://ai.ctyun.cn/v1",  # 天翼云息壤Token官方接口地址
                 temperature=0.1,
                 timeout=60
             )
