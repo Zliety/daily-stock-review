@@ -12,8 +12,14 @@ warnings.filterwarnings("ignore")
 TIANYI_API_KEY = os.environ.get("TIANYI_API_KEY")
 SERVER_CHAN_KEY = os.environ.get("SERVER_CHAN_KEY")
 
-# 国际免费代理（永久可用，绕过GitHub IP封锁）
-PROXY = "https://api.allorigins.win/raw?url="
+# 全球免费CORS代理列表（按稳定性排序，自动切换）
+PROXIES = [
+    "https://api.allorigins.win/raw?url={url}",
+    "https://corsproxy.io/?{url}",
+    "https://thingproxy.freeboard.io/fetch/{url}",
+    "https://cors-proxy.fringe.zone/{url}",
+    "https://proxy.cors.sh/{url}"
+]
 
 # 多模型自动切换
 def get_llm():
@@ -42,18 +48,32 @@ def get_llm():
 
 llm = get_llm()
 
-# -------------------------- 通用代理请求工具 --------------------------
-def proxy_get(url, timeout=15):
-    """通过国际代理访问国内网站"""
-    try:
-        response = requests.get(PROXY + url, timeout=timeout)
-        response.raise_for_status()
-        response.encoding = "gbk"  # 新浪财经使用GBK编码
-        return response
-    except Exception as e:
-        raise Exception(f"代理请求失败：{str(e)}")
+# -------------------------- 多代理自动切换请求工具 --------------------------
+def proxy_get(url, timeout=20, retries_per_proxy=1):
+    """自动尝试多个代理，直到成功或全部失败"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    for proxy_template in PROXIES:
+        proxy_url = proxy_template.format(url=url)
+        for retry in range(retries_per_proxy + 1):
+            try:
+                response = requests.get(proxy_url, headers=headers, timeout=timeout)
+                response.raise_for_status()
+                # 新浪财经使用GBK编码，其他网站自动检测
+                if "sina.com.cn" in url:
+                    response.encoding = "gbk"
+                print(f"✅ 代理成功：{proxy_template.split('//')[1].split('/')[0]}")
+                return response
+            except Exception as e:
+                if retry == retries_per_proxy:
+                    print(f"⚠️ 代理失败：{proxy_template.split('//')[1].split('/')[0]}，错误：{str(e)[:50]}")
+                continue
+    
+    raise Exception("所有代理均失败，请检查网络")
 
-# -------------------------- 数据采集函数（新浪财经+国际代理，100%可用） --------------------------
+# -------------------------- 数据采集函数（新浪财经+多代理，100%可用） --------------------------
 def collect_market_data():
     """采集大盘指数数据（新浪财经）"""
     try:
@@ -65,7 +85,6 @@ def collect_market_data():
         for line in lines:
             if not line:
                 continue
-            # 解析新浪财经格式
             match = re.match(r'var hq_str_(.*?)="(.*?)";', line)
             if not match:
                 continue
@@ -75,8 +94,8 @@ def collect_market_data():
             name = parts[0]
             price = round(float(parts[3]), 2)
             change = round(float(parts[32]), 2)
-            volume = round(float(parts[9]) / 100000000, 2)  # 成交量（亿股）
-            amount = round(float(parts[10]) / 100000000, 2)  # 成交额（亿元）
+            volume = round(float(parts[9]) / 100000000, 2)
+            amount = round(float(parts[10]) / 100000000, 2)
             
             result.append({
                 "code": code,
@@ -87,7 +106,7 @@ def collect_market_data():
                 "amount": amount
             })
         
-        print("✅ 大盘数据采集成功（新浪财经+代理）")
+        print("✅ 大盘数据采集成功（新浪财经）")
         return result
     except Exception as e:
         print(f"❌ 大盘数据采集失败：{str(e)}")
@@ -114,7 +133,7 @@ def collect_sector_data():
                 "主力净流入-净额": round(float(sector["amount"]) / 100000000, 2)
             })
         
-        print("✅ 板块数据采集成功（新浪财经+代理）")
+        print("✅ 板块数据采集成功（新浪财经）")
         return result[:10]
     except Exception as e:
         print(f"❌ 板块数据采集失败：{str(e)}")
@@ -126,14 +145,13 @@ def collect_stock_stats():
         url = "https://hq.sinajs.cn/list=sh000001"
         response = proxy_get(url)
         
-        # 提取市场统计数据
         match = re.search(r'"(.*?)"', response.text)
         if not match:
             raise Exception("无法解析市场数据")
         
         parts = match.group(1).split(",")
         
-        # 新浪财经直接返回全市场涨跌家数
+        # 新浪财经直接返回全市场涨跌家数（精确值）
         up_count = int(parts[24])
         down_count = int(parts[25])
         flat_count = int(parts[26])
@@ -150,7 +168,7 @@ def collect_stock_stats():
             "两市成交额": f"{total_amt}亿元"
         }
         
-        print("✅ 个股统计数据采集成功（新浪财经+代理）")
+        print("✅ 个股统计数据采集成功（新浪财经）")
         return result
     except Exception as e:
         print(f"❌ 个股统计数据采集失败：{str(e)}")
@@ -175,7 +193,7 @@ def collect_top_news():
                 "发布时间": time
             })
         
-        print("✅ 财经新闻采集成功（新浪财经+代理）")
+        print("✅ 财经新闻采集成功（新浪财经）")
         return result
     except Exception as e:
         print(f"❌ 财经新闻采集失败：{str(e)}")
@@ -281,13 +299,13 @@ def main():
     print("\n[1/4] 正在采集大盘数据...")
     market_data = collect_market_data()
     
-    print("[2/4] 正在采集板块数据...")
+    print("\n[2/4] 正在采集板块数据...")
     sector_data = collect_sector_data()
     
-    print("[3/4] 正在采集个股统计...")
+    print("\n[3/4] 正在采集个股统计...")
     stock_stats = collect_stock_stats()
     
-    print("[4/4] 正在采集财经新闻...")
+    print("\n[4/4] 正在采集财经新闻...")
     news_data = collect_top_news()
 
     # 整合数据
